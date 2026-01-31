@@ -1,39 +1,58 @@
 ## Forest - Entity Component System Library
 ##
-## Usage Example:
+## Usage Examples:
+##
+## **1. Manual approach - explicitly list all types:**
 ## ```nim
-## # Manual approach:
 ## type
 ##   Player = object
 ##   Enemy = object
 ##   Bullet = object
 ##
 ## startEntityBuffer(Player, Enemy, Bullet)
+## ```
 ##
-## # Or use the entity pragma for automatic registration:
-## entity:
+## **2. Block registration - register all types in a block:**
+## ```nim
+## entityBlock:
 ##   type
 ##     Player* = object
 ##     Enemy* = object
 ##     Bullet* = object
 ##
-## createEntitySystem()  # Automatically uses all registered entity types
+## createEntitySystem()
+## ```
 ##
-## # Both generate:
-## # type
-## #   EntityBuffers = object
-## #     players*: EntityBuffer[Player]
-## #     enemys*: EntityBuffer[Enemy]
-## #     bullets*: EntityBuffer[Bullet]
-## #
-## #   EntitySystem = object
-## #     buffers*: EntityBuffers
+## **3. Pragma registration - only register marked types:**
+## ```nim
+## entities:
+##   type
+##     Player {.entity.} = object
+##     Enemy {.entity.} = object
+##     NotAnEntity = object  # Won't be registered
+##
+## createEntitySystem()
+## ```
+##
+## All approaches generate:
+## ```nim
+## type
+##   EntityBuffers = object
+##     players*: EntityBuffer[Player]
+##     enemys*: EntityBuffer[Enemy]
+##     bullets*: EntityBuffer[Bullet]
+##
+##   EntitySystem = object
+##     buffers*: EntityBuffers
 ## ```
 
 import std/[macros, strutils, macrocache]
 
 # Macro cache to store registered entity types
 const entityTypes = CacheSeq"ForestEntityTypes"
+
+# Define entity as a pragma marker
+template entity* {.pragma.}
 
 type
   EntityBuffer*[T] = object
@@ -97,11 +116,11 @@ macro startEntityBuffer*(types: varargs[untyped]) =
     )
   )
 
-macro entity*(typeDefs: untyped): untyped =
-  ## Pragma-like macro to register entity types.
+macro entityBlock*(typeDefs: untyped): untyped =
+  ## Block macro to register all entity types in a type section.
   ## Usage:
   ## ```nim
-  ## entity:
+  ## entityBlock:
   ##   type
   ##     Player* = object
   ##     Enemy* = object
@@ -121,6 +140,48 @@ macro entity*(typeDefs: untyped): untyped =
 
       # Add to macro cache
       entityTypes.add(typeName)
+
+macro entities*(typeDefs: untyped): untyped =
+  ## Processes a type section and registers types marked with {.entity.} pragma.
+  ## Usage:
+  ## ```nim
+  ## entities:
+  ##   type
+  ##     Player {.entity.} = object
+  ##     Enemy {.entity.} = object
+  ##     NotAnEntity = object  # Not registered
+  ## ```
+  result = typeDefs
+
+  # Process the type section
+  expectKind(typeDefs, nnkTypeSection)
+
+  for typeDef in typeDefs:
+    if typeDef.kind == nnkTypeDef:
+      var typeName: NimNode
+      var hasEntityPragma = false
+
+      # Check if the type has pragmas
+      if typeDef[0].kind == nnkPragmaExpr:
+        # Type has pragmas: TypeName {.entity.}
+        typeName = typeDef[0][0]
+        let pragmas = typeDef[0][1]
+
+        # Look for the entity pragma
+        for pragma in pragmas:
+          if pragma.kind == nnkIdent and $pragma == "entity":
+            hasEntityPragma = true
+            break
+      else:
+        typeName = typeDef[0]
+
+      # Handle exported types (TypeName*)
+      if typeName.kind == nnkPostfix:
+        typeName = typeName[1]
+
+      # Register if has entity pragma
+      if hasEntityPragma:
+        entityTypes.add(typeName)
 
 macro createEntitySystem*(): untyped =
   ## Creates EntityBuffers and EntitySystem using all entity types
