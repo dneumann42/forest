@@ -188,11 +188,8 @@ macro createEntitySystem*(): untyped =
   ## that were registered with the `entity` macro.
   ##
   ## Must be called after all entity types are registered.
-  var typesList = nnkArgList.newTree()
+  result = newCall(ident("startEntityBuffer"))
 
   for i in 0 ..< entityTypes.len:
-    typesList.add(entityTypes[i])
-
-  # Generate call to startEntityBuffer with all registered types
-  result = newCall(ident("startEntityBuffer"), typesList)
+    result.add(entityTypes[i])
 
