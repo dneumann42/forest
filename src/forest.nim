@@ -1,10 +1,34 @@
+## Forest - Entity Component System Library
+##
+## Usage Example:
+## ```nim
+## type
+##   Player = object
+##   Enemy = object
+##   Bullet = object
+##
+## startEntityBuffer(Player, Enemy, Bullet)
+##
+## # This generates:
+## # type
+## #   EntityBuffers = object
+## #     players*: EntityBuffer[Player]
+## #     enemys*: EntityBuffer[Enemy]
+## #     bullets*: EntityBuffer[Bullet]
+## #
+## #   EntitySystem = object
+## #     buffers*: EntityBuffers
+## ```
+
 import std/[macros, strutils]
 
 type
   EntityBuffer*[T] = object
-    data: seq[T]
+    data*: seq[T]
 
 macro startEntityBuffer*(types: varargs[untyped]) =
+  ## Generates EntityBuffers type with fields for each entity type.
+  ## Each type T becomes a field named `Ts: EntityBuffer[T]`
   # Build the record list for EntityBuffers fields
   var recList = newNimNode(nnkRecList)
 
