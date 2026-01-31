@@ -2,6 +2,7 @@
 ##
 ## Usage Example:
 ## ```nim
+## # Manual approach:
 ## type
 ##   Player = object
 ##   Enemy = object
@@ -9,7 +10,16 @@
 ##
 ## startEntityBuffer(Player, Enemy, Bullet)
 ##
-## # This generates:
+## # Or use the entity pragma for automatic registration:
+## entity:
+##   type
+##     Player* = object
+##     Enemy* = object
+##     Bullet* = object
+##
+## createEntitySystem()  # Automatically uses all registered entity types
+##
+## # Both generate:
 ## # type
 ## #   EntityBuffers = object
 ## #     players*: EntityBuffer[Player]
@@ -20,7 +30,10 @@
 ## #     buffers*: EntityBuffers
 ## ```
 
-import std/[macros, strutils]
+import std/[macros, strutils, macrocache]
+
+# Macro cache to store registered entity types
+const entityTypes = CacheSeq"ForestEntityTypes"
 
 type
   EntityBuffer*[T] = object
@@ -83,4 +96,42 @@ macro startEntityBuffer*(types: varargs[untyped]) =
       )
     )
   )
+
+macro entity*(typeDefs: untyped): untyped =
+  ## Pragma-like macro to register entity types.
+  ## Usage:
+  ## ```nim
+  ## entity:
+  ##   type
+  ##     Player* = object
+  ##     Enemy* = object
+  ## ```
+  result = typeDefs
+
+  # Process the type section to extract type names
+  expectKind(typeDefs, nnkTypeSection)
+
+  for typeDef in typeDefs:
+    if typeDef.kind == nnkTypeDef:
+      # Get the type name (handle exported types with *)
+      let typeName = if typeDef[0].kind == nnkPostfix:
+        typeDef[0][1]  # Skip the * postfix
+      else:
+        typeDef[0]
+
+      # Add to macro cache
+      entityTypes.add(typeName)
+
+macro createEntitySystem*(): untyped =
+  ## Creates EntityBuffers and EntitySystem using all entity types
+  ## that were registered with the `entity` macro.
+  ##
+  ## Must be called after all entity types are registered.
+  var typesList = nnkArgList.newTree()
+
+  for i in 0 ..< entityTypes.len:
+    typesList.add(entityTypes[i])
+
+  # Generate call to startEntityBuffer with all registered types
+  result = newCall(ident("startEntityBuffer"), typesList)
 
