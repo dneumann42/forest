@@ -2,7 +2,20 @@ import std/[macros, strutils, macrocache, oids, hashes, tables, sets]
 
 const entityTypes = CacheSeq"ForestEntityTypes"
 
-template entity* {.pragma.}
+macro entity*(typeDef: untyped): untyped =
+  result = typeDef
+  var typeName: NimNode
+  if typeDef.kind == nnkTypeDef:
+    var nameNode = typeDef[0]
+    if nameNode.kind == nnkPragmaExpr:
+      nameNode = nameNode[0]
+    if nameNode.kind == nnkPostfix:
+      typeName = nameNode[1]
+    else:
+      typeName = nameNode
+    entityTypes.add(typeName)
+  else:
+    error("entity pragma can only be applied to type definitions", typeDef)
 
 type
   EntityId* = distinct Oid
@@ -77,22 +90,17 @@ macro matching*(entitySystem: typed, varName: untyped, conceptType: typed, body:
   ## and iterates over all matching buffers
 
   result = newStmtList()
-
-  # Generate checks for each registered entity type
   var checks = newStmtList()
-
   for i in 0 ..< entityTypes.len:
-    let entityType = entityTypes[i]
-
-    # For each type, check if it matches the concept and iterate if it does
-    let buffersVar = ident("buffers" & $i)
+    let 
+      entityType = entityTypes[i]
+      buffersVar = ident("buffers" & $i)
 
     checks.add(quote do:
       block:
         var `buffersVar` = `entitySystem`.buffers
         for name, field in fieldPairs(`buffersVar`):
           when field is EntityBuffer[`entityType`]:
-            # Check if this entity type matches the concept
             when `entityType` is `conceptType`:
               let buffer = cast[EntityBuffer[`entityType`]](field)
               for `varName` {.inject.} in buffer.data:
@@ -109,22 +117,17 @@ macro matchingMut*(entitySystem: typed, varName: untyped, conceptType: typed, bo
   ##     entity.pos = vec2(0, 0)
 
   result = newStmtList()
-
-  # Generate checks for each registered entity type
   var checks = newStmtList()
-
   for i in 0 ..< entityTypes.len:
-    let entityType = entityTypes[i]
-
-    # For each type, check if it matches the concept and iterate if it does
-    let buffersVar = ident("buffers" & $i)
+    let 
+      entityType = entityTypes[i]
+      buffersVar = ident("buffers" & $i)
 
     checks.add(quote do:
       block:
         var `buffersVar` = `entitySystem`.buffers
         for name, field in fieldPairs(`buffersVar`):
           when field is EntityBuffer[`entityType`]:
-            # Check if this entity type matches the concept
             when `entityType` is `conceptType`:
               var buffer = cast[EntityBuffer[`entityType`]](field)
               for `varName` {.inject.} in buffer.data.mitems:
@@ -150,25 +153,18 @@ macro each*(entitySystem: typed, types: varargs[typed], body: untyped): untyped 
   let numTypes = types.len
   if numTypes == 0:
     error("each requires at least one type")
-    return
 
-  # Generate variable names: a, b, c, d, etc.
   let varNames = "abcdefghijklmnopqrstuvwxyz"
   if numTypes > varNames.len:
     error("each supports up to " & $varNames.len & " entity types")
-    return
 
-  # Create buffer variable names and retrieval statements
-  # Track unique types to avoid duplicate buffer retrievals
   var bufferIdents = newSeq[NimNode](numTypes)
   var typeToBuffer = newSeq[(string, NimNode)]()
 
-  # Generate inline buffer retrieval for each unique type
   for i in 0 ..< numTypes:
     let typ = types[i]
     let typeName = typ.repr
 
-    # Check if we already retrieved this type
     var existingBuffer: NimNode = nil
     for (tName, bufIdent) in typeToBuffer:
       if tName == typeName:
@@ -176,13 +172,9 @@ macro each*(entitySystem: typed, types: varargs[typed], body: untyped): untyped 
         break
 
     if existingBuffer.isNil:
-      # First time seeing this type - retrieve it
       let bufferIdent = ident("buffer" & $typeToBuffer.len)
       bufferIdents[i] = bufferIdent
       typeToBuffer.add((typeName, bufferIdent))
-
-      # Generate: var bufferN: EntityBuffer[Type]
-      # Then inline fieldPairs loop to find it
       let buffersIdent = ident("buffers" & $typeToBuffer.len)
       stmts.add(quote do:
         var `bufferIdent`: EntityBuffer[`typ`]
@@ -194,13 +186,9 @@ macro each*(entitySystem: typed, types: varargs[typed], body: untyped): untyped 
               break
       )
     else:
-      # Reuse existing buffer for this type
       bufferIdents[i] = existingBuffer
 
-  # Build nested loops from innermost to outermost
   var loopBody = body
-
-  # Track which types are the same for optimization
   var typeGroups = newSeq[seq[int]](numTypes)
   for i in 0 ..< numTypes:
     typeGroups[i] = @[i]
@@ -210,43 +198,32 @@ macro each*(entitySystem: typed, types: varargs[typed], body: untyped): untyped 
         typeGroups[i] = @[]
         break
 
-  # Generate loops from innermost to outermost
   for i in countdown(numTypes - 1, 0):
     let varName = ident($varNames[i])
     let indexName = ident("idx" & $i)
     let bufferIdent = bufferIdents[i]
 
-    # Determine loop start index
     var startIdx: NimNode
-
-    # If this type appeared before, start from previous index + 1
     var prevSameTypeIdx = -1
     for j in 0 ..< i:
       if types[j].repr == types[i].repr:
         prevSameTypeIdx = j
 
     if prevSameTypeIdx >= 0:
-      # Same type as a previous one - start from previous index + 1 to avoid duplicates
       let prevIndexName = ident("idx" & $prevSameTypeIdx)
       startIdx = quote do:
         `prevIndexName` + 1
     else:
-      # Different type or first occurrence - start from 0
       startIdx = newLit(0)
-
-    # Create the for loop
     loopBody = quote do:
       for `indexName` in `startIdx` ..< `bufferIdent`.data.len:
         let `varName` {.inject.} = `bufferIdent`.data[`indexName`]
         `loopBody`
-
   stmts.add(loopBody)
-
-  # Wrap in a block to isolate variables
   result = newStmtList(newBlockStmt(stmts))
 
 macro eachMut*(entitySystem: typed, types: varargs[typed], body: untyped): untyped =
-  ## Iterate over combinations of entities (mutable)
+  ## Iterate over combinations of entities
   ## Same as each() but yields var references
 
   var stmts = newStmtList()
@@ -254,25 +231,18 @@ macro eachMut*(entitySystem: typed, types: varargs[typed], body: untyped): untyp
   let numTypes = types.len
   if numTypes == 0:
     error("eachMut requires at least one type")
-    return
 
-  # Generate variable names: a, b, c, d, etc.
   let varNames = "abcdefghijklmnopqrstuvwxyz"
   if numTypes > varNames.len:
     error("eachMut supports up to " & $varNames.len & " entity types")
-    return
 
-  # Create buffer variable names and retrieval statements
-  # Track unique types to avoid duplicate buffer retrievals
   var bufferIdents = newSeq[NimNode](numTypes)
   var typeToBuffer = newSeq[(string, NimNode)]()
 
-  # Generate inline buffer retrieval for each unique type
   for i in 0 ..< numTypes:
     let typ = types[i]
     let typeName = typ.repr
 
-    # Check if we already retrieved this type
     var existingBuffer: NimNode = nil
     for (tName, bufIdent) in typeToBuffer:
       if tName == typeName:
@@ -280,13 +250,9 @@ macro eachMut*(entitySystem: typed, types: varargs[typed], body: untyped): untyp
         break
 
     if existingBuffer.isNil:
-      # First time seeing this type - retrieve it
       let bufferIdent = ident("buffer" & $typeToBuffer.len)
       bufferIdents[i] = bufferIdent
       typeToBuffer.add((typeName, bufferIdent))
-
-      # Generate: var bufferN: EntityBuffer[Type]
-      # Then inline fieldPairs loop to find it
       let buffersIdent = ident("buffers" & $typeToBuffer.len)
       stmts.add(quote do:
         var `bufferIdent`: EntityBuffer[`typ`]
@@ -298,45 +264,30 @@ macro eachMut*(entitySystem: typed, types: varargs[typed], body: untyped): untyp
               break
       )
     else:
-      # Reuse existing buffer for this type
       bufferIdents[i] = existingBuffer
 
-  # Build nested loops from innermost to outermost
   var loopBody = body
-
-  # Generate loops from innermost to outermost
   for i in countdown(numTypes - 1, 0):
-    let varName = ident($varNames[i])
-    let indexName = ident("idx" & $i)
-    let bufferIdent = bufferIdents[i]
-
-    # Determine loop start index
+    let 
+      varName = ident($varNames[i])
+      indexName = ident("idx" & $i)
+      bufferIdent = bufferIdents[i]
     var startIdx: NimNode
-
-    # If this type appeared before, start from previous index + 1
     var prevSameTypeIdx = -1
     for j in 0 ..< i:
       if types[j].repr == types[i].repr:
         prevSameTypeIdx = j
-
     if prevSameTypeIdx >= 0:
-      # Same type as a previous one - start from previous index + 1 to avoid duplicates
       let prevIndexName = ident("idx" & $prevSameTypeIdx)
       startIdx = quote do:
         `prevIndexName` + 1
     else:
-      # Different type or first occurrence - start from 0
       startIdx = newLit(0)
-
-    # Create the for loop with var
     loopBody = quote do:
       for `indexName` in `startIdx` ..< `bufferIdent`.data.len:
         var `varName` {.inject.} = `bufferIdent`.data[`indexName`]
         `loopBody`
-
   stmts.add(loopBody)
-
-  # Wrap in a block to isolate variables
   result = newStmtList(newBlockStmt(stmts))
 
 macro startEntityBuffer*(types: varargs[untyped]) =
@@ -454,7 +405,6 @@ macro initEntitySystem*(): untyped =
       newCall(bufferType)
     ))
 
-  # Build the proc definition manually
   result = newProc(
     name = postfix(ident("init"), "*"),
     params = [
@@ -467,7 +417,85 @@ macro initEntitySystem*(): untyped =
     )
   )
 
-template generateEntitySystem*() =
-  createEntitySystem()
-  initEntitySystem()
+macro generateEntitySystem*(types: varargs[untyped]): untyped =
+  ## Generate entity system from registered entity types
+  ## Usage: generateEntitySystem() - uses types registered with {.entity.} pragma
+  ## Or: generateEntitySystem(Player, Enemy, Item) - explicit types
 
+  var useTypes: seq[NimNode]
+
+  if types.len > 0:
+    for typ in types:
+      useTypes.add(typ)
+  else:
+    for i in 0 ..< entityTypes.len:
+      useTypes.add(entityTypes[i])
+  if useTypes.len == 0:
+    error("No entity types found. Either mark types with {.entity.} or pass them to generateEntitySystem()")
+
+  var createCall = newCall(ident("startEntityBuffer"))
+  for typ in useTypes:
+    createCall.add(typ)
+
+  result = newStmtList()
+  result.add(createCall)
+  result.add(newCall(ident("initEntitySystem")))
+
+macro forwardFields*(conceptType: untyped, componentField: untyped, fields: varargs[untyped]): untyped =
+  ## Generates getter and setter procs that forward field access from a concept to its component
+  ##
+  ## Example:
+  ##   forwardFields(IsSpatial, spatial, pos)
+  ##
+  ## Generates:
+  ##   proc pos*(sp: IsSpatial): auto {.inline.} = sp.spatial.pos
+  ##   proc `pos=`*(sp: var IsSpatial, value: auto) {.inline.} = sp.spatial.pos = value
+
+  result = newStmtList()
+
+  for field in fields:
+    let fieldIdent = field
+    let setterIdent = ident($field & "=")
+
+    let getter = quote do:
+      proc `fieldIdent`*(sp: `conceptType`): auto {.inline.} =
+        sp.`componentField`.`fieldIdent`
+
+    let setter = quote do:
+      proc `setterIdent`*(sp: var `conceptType`, value: auto) {.inline.} =
+        sp.`componentField`.`fieldIdent` = value
+
+    result.add(getter)
+    result.add(setter)
+
+macro genComponent*(typeName: untyped, fields: varargs[untyped]): untyped =
+  ## Generates a concept type and field forwarding for a component
+  ##
+  ## Example:
+  ##   genComponent(Spatial, pos)
+  ##
+  ## Generates:
+  ##   type
+  ##     IsSpatial* = concept t
+  ##       t.spatial is Spatial
+  ##   forwardFields(IsSpatial, spatial, pos)
+
+  let typeNameStr = $typeName
+  let conceptName = ident("Is" & typeNameStr)
+  let fieldName = ident(typeNameStr[0].toLowerAscii & typeNameStr[1..^1])
+
+  result = newStmtList()
+
+  # Try generating concept with quote do
+  let tIdent = ident("t")
+  result.add quote do:
+    type
+      `conceptName`* = concept `tIdent`
+        `tIdent`.`fieldName` is `typeName`
+
+  # Generate field forwarding if fields are provided
+  if fields.len > 0:
+    let forwardCall = newCall(ident("forwardFields"), conceptName, fieldName)
+    for field in fields:
+      forwardCall.add(field)
+    result.add(forwardCall)
