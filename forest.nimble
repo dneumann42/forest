@@ -5,3 +5,6 @@ license       = "MIT"
 srcDir        = "src"
 
 requires "nim >= 2.0.0"
+
+task test, "Run tests":
+  exec "nim c -r tests/test_forest.nim"
