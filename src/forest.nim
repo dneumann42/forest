@@ -93,6 +93,51 @@ proc has*[S, T](entitySystem: S, entityId: EntityId, _: typedesc[T]): bool =
       return buffer.alive.contains(entityId) and buffer.entityMap.hasKey(entityId)
   return false
 
+macro hasMatching*(entitySystem: typed, entityId: typed, conceptType: typed): bool =
+  ## Check if entity with given ID exists and satisfies the concept
+  ## Usage: entitySystem.hasMatching(entityId, IsCharacter)
+  var checks = newStmtList()
+  let foundVar = genSym(nskVar, "found")
+
+  for i in 0 ..< entityTypes.len:
+    let entityType = entityTypes[i]
+    checks.add(quote do:
+      when `entityType` is `conceptType`:
+        if `entitySystem`.has(`entityId`, `entityType`):
+          `foundVar` = true
+    )
+
+  result = quote do:
+    block:
+      var `foundVar` = false
+      `checks`
+      `foundVar`
+
+macro withMatching*(entitySystem: typed, entityId: typed, conceptType: typed, varName: untyped, body: untyped): untyped =
+  ## Execute code block with entity if it matches the concept
+  ## Usage:
+  ##   entitySystem.withMatching(entityId, IsCharacter, npc):
+  ##     # use npc here
+  var checks = newStmtList()
+  let foundVar = genSym(nskVar, "found")
+
+  for i in 0 ..< entityTypes.len:
+    let entityType = entityTypes[i]
+    checks.add(quote do:
+      when `entityType` is `conceptType`:
+        if `entitySystem`.has(`entityId`, `entityType`):
+          let `varName` = `entitySystem`.get(`entityId`, `entityType`)
+          `body`
+          `foundVar` = true
+    )
+
+  result = quote do:
+    block:
+      var `foundVar` = false
+      `checks`
+      if not `foundVar`:
+        raise newException(KeyError, "No entity matching concept found: " & $`entityId`)
+
 type
   HasEntityBuffers* = concept e
     e.buffers is object
