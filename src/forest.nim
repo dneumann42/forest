@@ -25,6 +25,7 @@ type
     alive*: HashSet[EntityId]
     dead*: seq[int]
     data*: seq[T]
+    cache*: seq[(EntityId, T)]  # Cache for storing entities during scene transitions
 
 proc init*[T](_: typedesc[EntityBuffer[T]]): EntityBuffer[T] =
   ## Initialize an EntityBuffer with empty collections
@@ -33,6 +34,7 @@ proc init*[T](_: typedesc[EntityBuffer[T]]): EntityBuffer[T] =
   result.alive = initHashSet[EntityId]()
   result.dead = newSeq[int]()
   result.data = newSeq[T]()
+  result.cache = newSeq[(EntityId, T)]()
 
 proc `$`*(eid: EntityId): string = $Oid(eid)
 proc hash*(eid: EntityId): Hash {.borrow.}
@@ -92,6 +94,53 @@ proc has*[S, T](entitySystem: S, entityId: EntityId, _: typedesc[T]): bool =
       let buffer = cast[EntityBuffer[T]](field)
       return buffer.alive.contains(entityId) and buffer.entityMap.hasKey(entityId)
   return false
+
+proc pushToCache*[T](buffer: EntityBuffer[T]) =
+  ## Push all alive entities to cache and clear the buffer
+  ## Used to temporarily store entities during scene transitions
+  ##
+  ## Example workflow:
+  ##   # Before entering combat
+  ##   entitySystem.pushAllToCache()  # Save all entities
+  ##   scenes.pushScene("CombatScene")
+  ##
+  ##   # In CombatScene: spawn combat entities, do combat...
+  ##
+  ##   # After combat ends
+  ##   # Combat entities are killed/cleaned up
+  ##   scenes.popScene()  # Back to game scene
+  ##
+  ##   # In game scene load:
+  ##   if entitySystem.hasCachedEntities():
+  ##     entitySystem.popAllFromCache()  # Restore pre-combat state
+  buffer.cache.setLen(0)
+
+  # Copy all alive entities to cache using pairs iterator on entityMap
+  for id, index in buffer.entityMap.pairs:
+    if buffer.alive.contains(id):
+      buffer.cache.add((id, buffer.data[index]))
+
+  # Clear the buffer
+  buffer.alive.clear()
+  buffer.entityMap.clear()
+  buffer.data.setLen(0)
+  buffer.dead.setLen(0)
+
+proc popFromCache*[T](buffer: EntityBuffer[T]) =
+  ## Restore entities from cache back into the buffer
+  ## Used to restore entities after scene transitions
+  for (id, entity) in buffer.cache:
+    let index = buffer.data.len
+    buffer.data.add(entity)
+    buffer.entityMap[id] = index
+    buffer.alive.incl(id)
+
+  # Clear cache after restoring
+  buffer.cache.setLen(0)
+
+proc hasCachedEntities*[T](buffer: EntityBuffer[T]): bool =
+  ## Check if the buffer has any cached entities
+  buffer.cache.len > 0
 
 macro hasMatching*(entitySystem: typed, entityId: typed, conceptType: typed): bool =
   ## Check if entity with given ID exists and satisfies the concept
@@ -537,6 +586,58 @@ macro generateEntitySystem*(types: varargs[untyped]): untyped =
   result = quote do:
     `createCall`
     initEntitySystem()
+
+macro pushAllToCache*(entitySystem: typed): untyped =
+  ## Push all alive entities in all buffers to cache
+  ## Usage: entitySystem.pushAllToCache()
+  result = newStmtList()
+
+  for i in 0 ..< entityTypes.len:
+    let entityType = entityTypes[i]
+    let typeName = ($entityType).toLowerAscii & "s"
+    let fieldIdent = ident(typeName)
+
+    result.add(quote do:
+      `entitySystem`.buffers.`fieldIdent`.pushToCache()
+    )
+
+macro popAllFromCache*(entitySystem: typed): untyped =
+  ## Restore all entities from cache in all buffers
+  ## Usage: entitySystem.popAllFromCache()
+  result = newStmtList()
+
+  for i in 0 ..< entityTypes.len:
+    let entityType = entityTypes[i]
+    let typeName = ($entityType).toLowerAscii & "s"
+    let fieldIdent = ident(typeName)
+
+    result.add(quote do:
+      `entitySystem`.buffers.`fieldIdent`.popFromCache()
+    )
+
+macro hasCachedEntities*(entitySystem: typed): bool =
+  ## Check if any buffer has cached entities
+  ## Usage: if entitySystem.hasCachedEntities(): ...
+  result = newStmtList()
+  let resultVar = genSym(nskVar, "hasCached")
+
+  result.add(quote do:
+    var `resultVar` = false
+  )
+
+  for i in 0 ..< entityTypes.len:
+    let entityType = entityTypes[i]
+    let typeName = ($entityType).toLowerAscii & "s"
+    let fieldIdent = ident(typeName)
+
+    result.add(quote do:
+      if `entitySystem`.buffers.`fieldIdent`.hasCachedEntities():
+        `resultVar` = true
+    )
+
+  result.add(quote do:
+    `resultVar`
+  )
 
 macro forwardFields*(conceptType: untyped, componentField: untyped, fields: varargs[untyped]): untyped =
   ## Generates getter and setter procs that forward field access from a concept to its component
