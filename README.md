@@ -2,6 +2,8 @@
 
 A lightweight composable entity system for Nim.
 
+> **⚠️ Development Status**: This library is under active development and the API may change.
+
 ## What is Forest?
 
 Forest is an Entity Component System (ECS) that provides entity management and component composition. It uses Nim's concept system to create type-safe, composable entities without runtime overhead.
