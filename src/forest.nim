@@ -95,6 +95,21 @@ proc has*[S, T](entitySystem: S, entityId: EntityId, _: typedesc[T]): bool =
       return buffer.alive.contains(entityId) and buffer.entityMap.hasKey(entityId)
   return false
 
+proc kill*[T](buffer: EntityBuffer[T], entityId: EntityId) =
+  ## Remove an entity from the buffer, freeing its slot for reuse
+  if buffer.alive.contains(entityId):
+    let index = buffer.entityMap[entityId]
+    buffer.alive.excl(entityId)
+    buffer.entityMap.del(entityId)
+    buffer.dead.add(index)
+
+proc killAll*[T](buffer: EntityBuffer[T]) =
+  ## Remove all entities from the buffer and reset it
+  buffer.alive.clear()
+  buffer.entityMap.clear()
+  buffer.dead.setLen(0)
+  buffer.data.setLen(0)
+
 proc pushToCache*[T](buffer: EntityBuffer[T]) =
   ## Push all alive entities to cache and clear the buffer
   ## Used to temporarily store entities during scene transitions
@@ -613,6 +628,59 @@ macro popAllFromCache*(entitySystem: typed): untyped =
 
     result.add(quote do:
       `entitySystem`.buffers.`fieldIdent`.popFromCache()
+    )
+
+macro kill*(entitySystem: typed, entityId: typed): untyped =
+  ## Kill the entity with the given ID, searching all buffers
+  ## Usage: entitySystem.kill(entityId)
+  result = newStmtList()
+
+  for i in 0 ..< entityTypes.len:
+    let entityType = entityTypes[i]
+    let typeName = ($entityType).toLowerAscii & "s"
+    let fieldIdent = ident(typeName)
+
+    result.add(quote do:
+      `entitySystem`.buffers.`fieldIdent`.kill(`entityId`)
+    )
+
+macro killAll*(entitySystem: typed): untyped =
+  ## Kill all entities in all buffers
+  ## Usage: entitySystem.killAll()
+  result = newStmtList()
+
+  for i in 0 ..< entityTypes.len:
+    let entityType = entityTypes[i]
+    let typeName = ($entityType).toLowerAscii & "s"
+    let fieldIdent = ident(typeName)
+
+    result.add(quote do:
+      `entitySystem`.buffers.`fieldIdent`.killAll()
+    )
+
+macro killAllExcept*(entitySystem: typed, exceptIds: typed): untyped =
+  ## Kill all entities in all buffers except those with IDs in exceptIds
+  ## Usage: entitySystem.killAllExcept(keepIds)  # where keepIds is a seq/openArray of EntityId
+  result = newStmtList()
+
+  for i in 0 ..< entityTypes.len:
+    let entityType = entityTypes[i]
+    let typeName = ($entityType).toLowerAscii & "s"
+    let fieldIdent = ident(typeName)
+
+    result.add(quote do:
+      block:
+        var toKill: seq[EntityId]
+        for id in `entitySystem`.buffers.`fieldIdent`.alive:
+          var keep = false
+          for exceptId in `exceptIds`:
+            if id == exceptId:
+              keep = true
+              break
+          if not keep:
+            toKill.add(id)
+        for id in toKill:
+          `entitySystem`.buffers.`fieldIdent`.kill(id)
     )
 
 macro hasCachedEntities*(entitySystem: typed): bool =
